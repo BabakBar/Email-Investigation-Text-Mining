@@ -1,0 +1,260 @@
+---
+title: "Text Analytics - Investigation on emails"
+subtitle: "Data Analysis"
+author: "Babak Barghi"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    number_sections: yes
+---
+
+\newpage
+\tableofcontents
+\newpage
+---
+
+```{r setup, eval=TRUE, echo=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+First we load the libraries.
+
+```{r, message=FALSE}
+library(tidyverse)
+library(tm)
+library(SnowballC)
+library(caTools)
+library(rpart)
+library(rpart.plot)
+library(ROCR)
+library(randomForest)
+library(kableExtra)
+```
+
+# Data description
+We have in energy_bids.csv 855 mails and a binary data that relates (1) or not (0) with the
+investigation of the company in fraud in energy bids and scheduling.
+
+# Task 1: Load the data and have a look to one email related with the case and one that is not.
+
+```{r}
+mydata <- read_csv("energy_bids.csv")
+str(mydata)
+#better look
+strwrap(mydata$email[1],width = 0.9 * getOption("width"))
+
+```
+According to result, The data set contains just two fields:
+
+email: the text of the email in question,
+responsive: a binary (0/1) variable telling whether the email relates to energy schedules or bids.
+
+# Task 2: How many mails of each class you have?
+
+In order to see count of emails *table* function is used.
+
+```{r}
+table(mydata$responsive)
+```
+
+There are 716 emails that is not relevant, and there are 139 emails that are relevant. 
+
+# Task 3: Create the corpus. How many characters does the first mail have?
+
+```{r}
+corpus = VCorpus(VectorSource(mydata$email))
+corpus
+corpus[[1]]
+```
+
+According to results, first mail have 5605 characters. 
+
+# Task 4:	Preprocess the corpus (lowercase, remove punctuation, remove stop words and stem) count the characters after each step for the first email.
+
+Below function are used to get required information, and their answers also is shown step by step. The purpose of this process is making data more efficient to use. We see each step result in the email 11th 
+
+```{r}
+corpus <- tm_map(corpus, tolower)
+corpus[[1]]
+```
+
+
+```{r}
+corpus <- tm_map(corpus, PlainTextDocument)
+corpus[[1]]
+```
+
+
+```{r}
+corpus <- tm_map(corpus, removePunctuation)
+corpus[[1]]
+```
+
+
+```{r}
+corpus <- tm_map(corpus, removeWords, c(stopwords("english"))) 
+corpus[[1]]
+```
+
+
+```{r}
+corpus <- tm_map(corpus, stemDocument)
+corpus[[1]]
+corpus[[1]]$content
+```
+
+It can be seen that, after the following corpus the number of characters in the first email has dropped from 5605 to 3714.
+
+# Task 5:	Using a frequency matrix, how many words appear at least 20, 200 and 1000 times in any email?
+
+In order to find frequencies following code is used. Data will be prepared for estimation by considering these probabilities. 
+
+```{r}
+frequencies = DocumentTermMatrix(corpus)
+```
+
+To find words appear at leas 20 times: 
+
+```{r, max.print = 20}
+findFreqTerms(frequencies, lowfreq=20)
+```
+
+To find words appear at leas 200 times: 
+
+```{r}
+findFreqTerms(frequencies, lowfreq=200)
+```
+
+To find words appear at leas 1000 times:
+
+```{r}
+findFreqTerms(frequencies, lowfreq=1000)
+```
+
+There are only five words with frequencies higher than 1000 
+
+# Task 6:	Remove those that appear less than 3%
+
+For this part *removeSparseTerms* function is used. The purpose of this to eliminate unnecessary words to have a better model. Also, we can overcome sparsity with this method. 
+
+```{r}
+sparse = removeSparseTerms(frequencies, 0.97)
+sparse
+```
+
+# Task 7:	Create the data frame with the outcome. 
+
+For the prediction analyses, data frame is needed to be created because we cannot know the effects of words if all of them are in one row. Thus, we need to separate all words in a correct order. Below codes are used to create the data frame. 
+
+```{r}
+emailSparse = as.data.frame(as.matrix(sparse))
+colnames(emailSparse) = make.names(colnames(emailSparse))
+emailSparse$responsive <- mydata$responsive
+str(emailSparse, list.len = 20)
+```
+
+# Task 8: Split in a training and a testing set
+
+In order to create test and training data, below code is used, also split ratio is chosen as 0.75
+
+```{r}
+set.seed(42)
+split = sample.split(emailSparse$responsive, SplitRatio = 0.75)
+
+trainSparse <- subset(emailSparse, split==TRUE)
+testSparse <- subset(emailSparse, split==FALSE)
+```
+
+# Task 9:	Create a CART model 
+
+By using the train set the CART model will be built.
+
+```{r, fig1, fig.cap= "CART Model of trainSparse"}
+emailCART = rpart(responsive ~ ., data=trainSparse, method="class")
+prp(emailCART)
+```
+
+# Task 10:	Predict the probability of each mail of being or not relevant in the investigation.
+
+Now to predict probabilities, *predict* function is used without using type=”class” comment. These probabilities show the probability of being 0 or 1 for emails. 
+
+```{r}
+predictCART_prop = predict(emailCART, newdata=testSparse)
+predictCART_prop[1:10,]
+```
+
+The first column is the predicted probability of the document being non-responsive.
+The second column is the predicted probability of the document being responsive.
+They sum to 1.
+
+
+# Task 11:	Use a threshold 0.5 to classify and compare its accuracy with the baseline.
+
+For using a threshold 0.5 we need the type to be "class". Thus, the type will be added to the previous predict to convert the probilities obtaining results as 0 or 1.
+
+
+```{r}
+predictCART = predict(emailCART, newdata=testSparse, type="class")
+cmat <- table(testSparse$responsive, predictCART)
+cmat
+```
+```{r}
+accu_CART <- (cmat[1,1] + cmat[2,2])/sum(cmat)
+accu_CART
+
+cmat_baseline <- table(testSparse$responsive)
+cmat_baseline
+
+accu_baseline <- max(cmat_baseline)/sum(cmat_baseline)
+accu_baseline
+```
+
+
+The found accuracy is acceptable as good due to being close to 1. Also, found accuracy is bigger than baseline accuracy as expected.  
+
+# Add Task 12:	Use ROC for selecting the threshold.
+
+
+```{r, fig2, fig.cap="ROC Curve"}
+pred = prediction(predictCART_prop[,2],testSparse$responsive)
+perf = performance(pred, "tpr", "fpr")
+plot(perf, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7))
+```
+
+According to ROC curve plot, threshold value can be chosen around 0.1.  
+
+
+# Add Task 13:	Which is the area under the curve.
+
+In order to get area under curve below code is used. 
+
+```{r}
+auc_CART <- as.numeric(performance(pred, "auc")@y.values)
+auc_CART
+```
+
+The AUC of the CART models is 0.7947, which means that our model can differentiate between a randomly selected responsive and non-responsive document about 79.4% of the times.
+
+# Add Task 14:	Use random forest for improving the accuracy.
+
+In order to improve the accuracy of analysis, *random forest* can be used. This function improve accuracy by generating a large number of bootstrapped trees, classifying a case using each tree and deciding a final predicted outcome by combining all trees.
+
+```{r}
+set.seed(422)
+trainSparse_1 <- trainSparse
+testSparse_1 <- testSparse
+trainSparse_1$responsive = as.factor(trainSparse$responsive)
+testSparse_1$responsive = as.factor(testSparse$responsive)
+
+
+emailRF = randomForest(responsive ~ ., data=trainSparse_1)
+predictRF = predict(emailRF, newdata=testSparse_1)
+cmat1 <- table(testSparse_1$responsive, predictRF)
+
+accu_CART1 <- (cmat1[1,1] + cmat1[2,2])/sum(cmat1)
+accu_CART1
+```
+
+
+The previous accuracy was $0.8925$. Thus, we can observe a slightly improvement in the obtained accuracy. 
